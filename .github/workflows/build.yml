@@ -12,15 +12,16 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       APP_URL: ${{ github.event.inputs.site_url }}
     steps:
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: "8.9"
       - name: Create the Android project
@@ -330,6 +331,7 @@ jobs:
           import android.view.View;
           import android.view.WindowManager;
           import android.webkit.WebView;
+          import android.widget.FrameLayout;
           import android.widget.ImageView;
           import android.widget.LinearLayout;
           import android.widget.ScrollView;
@@ -354,7 +356,9 @@ jobs:
             WindowManager wm;
             LinearLayout box, panel, list;
             ImageView bubble;
-            TextView title, status, acct, stopBtn;
+            TextView title, status, sub, stopBtn;
+            ImageView banner;
+            View dot;
             ImageView avatar;
             WindowManager.LayoutParams lp;
             Handler h = new Handler(Looper.getMainLooper());
@@ -450,71 +454,92 @@ jobs:
               panel = new LinearLayout(this);
               panel.setOrientation(LinearLayout.VERTICAL);
               GradientDrawable g = new GradientDrawable();
-              g.setColor(0xF2101214);
-              g.setCornerRadius(dp(16));
-              g.setStroke(dp(1), 0xFF2DFFA0);
+              g.setColor(0xFF0B0F1A);
+              g.setCornerRadius(dp(26));
               panel.setBackground(g);
-              panel.setPadding(dp(12), dp(10), dp(12), dp(10));
-              LinearLayout head = new LinearLayout(this);
-              head.setOrientation(LinearLayout.HORIZONTAL);
-              head.setGravity(Gravity.CENTER_VERTICAL);
-              head.setPadding(dp(8), dp(8), dp(8), dp(8));
-              GradientDrawable hg = new GradientDrawable();
-              hg.setColor(0xFF171A1F);
-              hg.setCornerRadius(dp(34));
-              head.setBackground(hg);
+              panel.setClipToOutline(true);
+
+              FrameLayout hdr = new FrameLayout(this);
+              banner = new ImageView(this);
+              banner.setScaleType(ImageView.ScaleType.CENTER_CROP);
+              hdr.addView(banner, new FrameLayout.LayoutParams(-1, -1));
+              View shade = new View(this);
+              shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0x99000000, 0xF00B0F1A}));
+              hdr.addView(shade, new FrameLayout.LayoutParams(-1, -1));
+              LinearLayout hc = new LinearLayout(this);
+              hc.setOrientation(LinearLayout.VERTICAL);
+              hc.setGravity(Gravity.CENTER_HORIZONTAL);
+              hc.setPadding(dp(14), dp(16), dp(14), dp(10));
               avatar = new ImageView(this);
-              head.addView(avatar, new LinearLayout.LayoutParams(dp(44), dp(44)));
-              LinearLayout tcol = new LinearLayout(this);
-              tcol.setOrientation(LinearLayout.VERTICAL);
-              title = tv("ROBO EA", 15, 0xFFFFFFFF, true);
+              hc.addView(avatar, new LinearLayout.LayoutParams(dp(76), dp(76)));
+              title = tv("ROBO EA", 20, 0xFFFFFFFF, true);
               title.setSingleLine(true);
               title.setEllipsize(android.text.TextUtils.TruncateAt.END);
-              status = tv("", 13, 0xFFB5BAC1, false);
+              title.setGravity(Gravity.CENTER);
+              LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-2, -2);
+              tl.topMargin = dp(8);
+              hc.addView(title, tl);
+              sub = tv("", 13, 0xFFD0D4DC, false);
+              sub.setSingleLine(true);
+              sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
+              sub.setGravity(Gravity.CENTER);
+              hc.addView(sub);
+              LinearLayout sr = new LinearLayout(this);
+              sr.setOrientation(LinearLayout.HORIZONTAL);
+              sr.setGravity(Gravity.CENTER_VERTICAL);
+              dot = new View(this);
+              sr.addView(dot, new LinearLayout.LayoutParams(dp(11), dp(11)));
+              status = tv("", 14, 0xFF2DFF5A, false);
               status.setSingleLine(true);
-              status.setEllipsize(android.text.TextUtils.TruncateAt.END);
-              tcol.addView(title);
-              tcol.addView(status);
-              LinearLayout.LayoutParams tcl = new LinearLayout.LayoutParams(0, -2, 1f);
-              tcl.leftMargin = dp(10);
-              head.addView(tcol, tcl);
+              LinearLayout.LayoutParams stl = new LinearLayout.LayoutParams(-2, -2);
+              stl.leftMargin = dp(7);
+              sr.addView(status, stl);
+              LinearLayout.LayoutParams srl = new LinearLayout.LayoutParams(-2, -2);
+              srl.topMargin = dp(8);
+              hc.addView(sr, srl);
+              hdr.addView(hc, new FrameLayout.LayoutParams(-1, -2));
               TextView closeBtn = tv("\u2715", 16, 0xFFFFFFFF, true);
               closeBtn.setGravity(Gravity.CENTER);
               GradientDrawable cg = new GradientDrawable();
-              cg.setColor(0xFF2A2E35);
+              cg.setColor(0x99000000);
               cg.setShape(GradientDrawable.OVAL);
               closeBtn.setBackground(cg);
-              head.addView(closeBtn, new LinearLayout.LayoutParams(dp(38), dp(38)));
+              FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP | Gravity.END);
+              cl.topMargin = dp(10);
+              cl.rightMargin = dp(10);
+              hdr.addView(closeBtn, cl);
               closeBtn.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) { toggle(); }
               });
-              panel.addView(head);
-              acct = tv("", 12, 0xFFB5BAC1, false);
-              acct.setPadding(dp(6), dp(8), dp(6), dp(2));
-              panel.addView(acct);
+              panel.addView(hdr, new LinearLayout.LayoutParams(-1, dp(185)));
+
               ScrollView sv = new ScrollView(this);
+              sv.setBackgroundColor(0xFF131A2B);
               list = new LinearLayout(this);
               list.setOrientation(LinearLayout.VERTICAL);
+              list.setPadding(dp(16), dp(10), dp(16), dp(10));
               sv.addView(list);
-              panel.addView(sv, new LinearLayout.LayoutParams(-1, dp(270)));
+              panel.addView(sv, new LinearLayout.LayoutParams(-1, dp(230)));
+
+          TextView pw = new TextView(this);
+          android.text.SpannableString ps = new android.text.SpannableString("Powered by ROBO EA");
+          ps.setSpan(new android.text.style.ForegroundColorSpan(0xFF9AA0AA), 0, 11, 0);
+          ps.setSpan(new android.text.style.ForegroundColorSpan(0xFF6EA8FF), 11, 18, 0);
+          ps.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 11, 18, 0);
+          pw.setText(ps);
+          pw.setTextSize(13);
+          pw.setBackgroundColor(0xFF1B2438);
+          pw.setPadding(dp(14), dp(7), dp(16), dp(7));
+          LinearLayout.LayoutParams pwl = new LinearLayout.LayoutParams(-2, -2);
+          pwl.gravity = Gravity.END;
+          panel.addView(pw, pwl);
 
               LinearLayout row = new LinearLayout(this);
               row.setOrientation(LinearLayout.HORIZONTAL);
-              row.setPadding(0, dp(10), 0, 0);
-              TextView openBtn = btn("Open app", 0xFF2DFFA0);
+              row.setPadding(dp(14), dp(10), dp(14), dp(14));
               stopBtn = btn("Stop bot", 0xFFFF5470);
-              LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(0, -2, 1f);
-              bl.rightMargin = dp(6);
-              row.addView(openBtn, bl);
-              row.addView(stopBtn, new LinearLayout.LayoutParams(0, -2, 1f));
+              row.addView(stopBtn, new LinearLayout.LayoutParams(-1, -2));
               panel.addView(row);
-              openBtn.setOnClickListener(new View.OnClickListener() {
-                public void onClick(View v) {
-                  Intent i = new Intent(BotService.this, MainActivity.class);
-                  i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-                  startActivity(i);
-                }
-              });
               stopBtn.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
                   if (!stopArmed) {
@@ -534,7 +559,7 @@ jobs:
                 }
               });
               panel.setVisibility(View.GONE);
-              panelW = Math.min(dp(330), getResources().getDisplayMetrics().widthPixels - dp(16));
+              panelW = Math.min(dp(340), getResources().getDisplayMetrics().widthPixels - dp(16));
               LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(panelW, -2);
               pl.topMargin = dp(6);
               box.addView(panel, pl);
@@ -581,7 +606,7 @@ jobs:
               if (open) {
                 fill(System.currentTimeMillis() - lastPush > 15000);
                 DisplayMetrics m = getResources().getDisplayMetrics();
-                int need = dp(62 + 6 + 440);
+                int need = dp(62 + 6 + 185 + 230 + 34 + 64);
                 if (lp.y + need > m.heightPixels) lp.y = Math.max(0, m.heightPixels - need);
                 if (lp.x + panelW > m.widthPixels) lp.x = Math.max(0, m.widthPixels - panelW);
               }
@@ -602,7 +627,7 @@ jobs:
             void refresh() {
               if (!added) ensureBubble();
               if (!added) return;
-              boolean hide = MainActivity.visible;
+              boolean hide = MainActivity.visible || !run;
               box.setVisibility(hide ? View.GONE : View.VISIBLE);
               if (hide && open) { open = false; panel.setVisibility(View.GONE); }
               boolean stale = System.currentTimeMillis() - lastPush > 15000;
@@ -625,7 +650,8 @@ jobs:
               if (!key.equals(imgKey) && srcBmp != null) {
                 imgKey = key;
                 bubble.setImageBitmap(circle(srcBmp, dp(62), ring));
-                avatar.setImageBitmap(circle(srcBmp, dp(44), ring));
+                avatar.setImageBitmap(circle(srcBmp, dp(76), 0xFFFFFFFF));
+                  banner.setImageBitmap(srcBmp);
               }
               if (open) fill(stale);
             }
@@ -655,107 +681,67 @@ jobs:
             static String sgn(double v) { return Double.isNaN(v) ? "" : (v >= 0 ? "+" : "") + String.format(Locale.US, "%.2f", v); }
             static String px(double v) { return Double.isNaN(v) ? "-" : PX.format(v); }
 
-            LinearLayout card() {
-              LinearLayout c = new LinearLayout(this);
-              c.setOrientation(LinearLayout.VERTICAL);
-              c.setPadding(dp(16), dp(14), dp(16), dp(14));
-              GradientDrawable g = new GradientDrawable();
-              g.setColor(0xFF171A1F);
-              g.setCornerRadius(dp(18));
-              c.setBackground(g);
-              LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-              p.topMargin = dp(8);
-              c.setLayoutParams(p);
-              return c;
-            }
+            static int sideColor(String side) { return "BUY".equalsIgnoreCase(side) ? 0xFF2DFFA0 : 0xFFFF5470; }
 
-            TextView label(String s) {
-              TextView t = tv(s, 11, 0xFFB5BAC1, true);
-              t.setLetterSpacing(0.12f);
+            static String lv(String k, double v) { return k + " " + ((Double.isNaN(v) || v <= 0) ? "-" : px(v)); }
+
+            TextView line(String s, int color, int sp, boolean bold) {
+              TextView t = tv(s, sp, color, false);
+              t.setTypeface(android.graphics.Typeface.MONOSPACE, bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+              t.setPadding(0, dp(3), 0, dp(3));
               return t;
             }
 
-            static int sideColor(String side) { return "BUY".equalsIgnoreCase(side) ? 0xFF2DFFA0 : 0xFFFF5470; }
-
-            static String levels(double entry, double sl, double tp) {
-              StringBuilder d = new StringBuilder();
-              if (!Double.isNaN(entry) && entry > 0) d.append("Entry ").append(px(entry));
-              if (!Double.isNaN(sl) && sl > 0) { if (d.length() > 0) d.append(" \u00B7 "); d.append("SL ").append(px(sl)); }
-              if (!Double.isNaN(tp) && tp > 0) { if (d.length() > 0) d.append(" \u00B7 "); d.append("TP ").append(px(tp)); }
-              return d.toString();
+            void setDot(int color) {
+              GradientDrawable d = new GradientDrawable();
+              d.setShape(GradientDrawable.OVAL);
+              d.setColor(color);
+              dot.setBackground(d);
             }
 
             void fill(boolean stale) {
+              title.setText(name);
               int openN = 0;
               JSONArray tr = cur == null ? null : cur.optJSONArray("trades");
               if (tr != null) for (int i = 0; i < tr.length(); i++) {
                 JSONObject t = tr.optJSONObject(i);
                 if (t != null && !"closed".equals(t.optString("st"))) openN++;
               }
-              title.setText(name);
-              status.setText(stale ? "No updates from the app" : (!run ? "Stopped" : (openN > 0 ? "Managing " + openN + " open trade" + (openN > 1 ? "s" : "") : "Watching markets")));
-              status.setTextColor(stale ? 0xFFFFB020 : 0xFFB5BAC1);
+              int sc;
+              if (cur == null) { sc = 0xFFFFB020; status.setText("Waiting for the app"); }
+              else if (stale) { sc = 0xFFFFB020; status.setText("No updates from the app"); }
+              else if (!conn) { sc = 0xFFFF5470; status.setText("Server: Not connected"); }
+              else { sc = 0xFF2DFF5A; status.setText("Server: Connected"); }
+              status.setTextColor(sc);
+              setDot(sc);
+              if (cur != null && conn) sub.setText("Balance " + m(cur.optDouble("bal")) + " " + cur.optString("cur", "") + "   P/L " + sgn(cur.optDouble("pl")));
+              else sub.setText("");
               list.removeAllViews();
-              if (cur == null) { acct.setText("Waiting for the app. Open ROBO EA once."); return; }
-              String c = cur.optString("cur", "");
-              if (conn) acct.setText("Balance " + m(cur.optDouble("bal")) + " " + c + "   \u00B7   Equity " + m(cur.optDouble("eq")) + "   \u00B7   P/L " + sgn(cur.optDouble("pl")));
-              else acct.setText("MetaTrader account not connected");
-              int count = 0;
+              int teal = 0xFF2DE0B0;
+              list.addView(line(conn ? ">> CONNECTED TO TRADE SERVER" : ">> WAITING FOR TRADE SERVER", teal, 13, false));
+              if (cur == null) return;
+              list.addView(line(openN > 0 ? ">> BOT RUNNING. MANAGING " + openN + " TRADE" + (openN > 1 ? "S" : "") : ">> BOT RUNNING. WATCHING MARKETS", teal, 13, false));
               if (tr != null) for (int i = 0; i < tr.length(); i++) {
                 JSONObject t = tr.optJSONObject(i);
-                if (t != null && !"closed".equals(t.optString("st"))) { addTrade(t, false); count++; }
-              }
-              JSONArray sg = cur.optJSONArray("sigs");
-              if (sg != null) for (int i = 0; i < sg.length(); i++) {
-                JSONObject s = sg.optJSONObject(i);
-                if (s != null) { addSignal(s); count++; }
+                if (t == null || "closed".equals(t.optString("st"))) continue;
+                String side = t.optString("side").toUpperCase(Locale.US);
+                list.addView(line(">> TRADE OPENED  " + t.optString("s") + " " + side, sideColor(side), 14, true));
+                list.addView(line("   " + lv("ENTRY", t.optDouble("entry")), 0xFFFFFFFF, 13, false));
+                list.addView(line("   " + lv("SL", t.optDouble("sl")) + "   " + lv("TP", t.optDouble("tp")), 0xFFFFFFFF, 13, false));
+                double pl = t.optDouble("pl");
+                list.addView(line("   P/L " + sgn(pl), (Double.isNaN(pl) || pl >= 0) ? 0xFF2DFFA0 : 0xFFFF5470, 13, true));
+                if ("locked".equals(t.optString("st"))) list.addView(line("   PROFIT LOCKED. SL ABOVE ENTRY", teal, 12, false));
+                String note = t.optString("note", "");
+                if (note.length() > 0 && !"null".equals(note)) list.addView(line("   " + note, 0xFF8A8F98, 12, false));
               }
               int closedN = 0;
               if (tr != null) for (int i = 0; i < tr.length() && closedN < 3; i++) {
                 JSONObject t = tr.optJSONObject(i);
-                if (t != null && "closed".equals(t.optString("st"))) { addTrade(t, true); closedN++; count++; }
+                if (t == null || !"closed".equals(t.optString("st"))) continue;
+                list.addView(line(">> CLOSED " + t.optString("s") + " " + t.optString("side").toUpperCase(Locale.US) + "  " + sgn(t.optDouble("pl")), 0xFF8A8F98, 13, false));
+                closedN++;
               }
-              if (count == 0) {
-                LinearLayout e = card();
-                e.addView(label("AI TRADE ANALYSIS"));
-                e.addView(tv(run ? "Watching markets. No setup yet." : "Bot is stopped.", 14, 0xFFE6E8EB, false));
-                list.addView(e);
-              }
-            }
-
-            void addTrade(JSONObject t, boolean closed) {
-              LinearLayout c = card();
-              c.addView(label(closed ? "CLOSED TRADE" : "OPEN TRADE"));
-              String side = t.optString("side");
-              c.addView(tv(t.optString("s") + " " + side.toUpperCase(Locale.US), 22, closed ? 0xFF9AA0A6 : sideColor(side), true));
-              String lv = levels(t.optDouble("entry"), t.optDouble("sl"), t.optDouble("tp"));
-              if (lv.length() > 0) c.addView(tv(lv, 14, 0xFFFFFFFF, true));
-              double pl = t.optDouble("pl");
-              String line = "P/L " + sgn(pl);
-              if ("locked".equals(t.optString("st"))) line += "   \uD83D\uDD12 SL above entry, profit locked";
-              TextView p = tv(line, 13, (Double.isNaN(pl) || pl >= 0) ? 0xFF2DFFA0 : 0xFFFF5470, false);
-              p.setPadding(0, dp(4), 0, 0);
-              c.addView(p);
-              String note = t.optString("note", "");
-              if (note.length() > 0 && !"null".equals(note)) c.addView(tv(note, 12, 0xFF8A8F98, false));
-              list.addView(c);
-            }
-
-            void addSignal(JSONObject s) {
-              LinearLayout c = card();
-              c.addView(label("AI TRADE ANALYSIS"));
-              String side = s.optString("side", "");
-              if (side.length() > 0 && !"null".equals(side)) {
-                c.addView(tv(s.optString("s") + " " + side.toUpperCase(Locale.US), 22, sideColor(side), true));
-                String lv = levels(s.optDouble("entry"), s.optDouble("sl"), s.optDouble("tp"));
-                if (lv.length() > 0) c.addView(tv(lv, 14, 0xFFFFFFFF, true));
-              } else {
-                c.addView(tv(s.optString("s"), 20, 0xFFFFFFFF, true));
-              }
-              TextView g = tv(s.optString("sig"), 12, 0xFF8A8F98, false);
-              g.setPadding(0, dp(4), 0, 0);
-              c.addView(g);
-              list.addView(c);
+              list.addView(line(">> CONTINUE TRADING...", teal, 13, false));
             }
 
             @Override

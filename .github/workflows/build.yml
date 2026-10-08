@@ -1,0 +1,837 @@
+name: Build ROBO EA APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      site_url:
+        description: "Your ROBO EA website address (the Netlify link)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      APP_URL: ${{ github.event.inputs.site_url }}
+    steps:
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: "8.9"
+      - name: Create the Android project
+        run: |
+          set -e
+          mkdir -p robo/app/src/main/java/com/roboea/app robo/app/src/main/assets robo/app/src/main/res/mipmap-xxxhdpi
+          cd robo
+          cat > settings.gradle <<'ROBOEOF'
+          pluginManagement {
+            repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+            repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "roboea"
+          include ':app'
+          ROBOEOF
+          cat > build.gradle <<'ROBOEOF'
+          plugins {
+            id 'com.android.application' version '8.5.2' apply false
+          }
+          ROBOEOF
+          cat > gradle.properties <<'ROBOEOF'
+          org.gradle.jvmargs=-Xmx3g
+          android.useAndroidX=false
+          ROBOEOF
+          cat > app/build.gradle <<'ROBOEOF'
+          plugins {
+            id 'com.android.application'
+          }
+          android {
+            namespace 'com.roboea.app'
+            compileSdk 34
+            defaultConfig {
+              applicationId 'com.roboea.app'
+              minSdk 24
+              targetSdk 33
+              versionCode 1
+              versionName '1.0'
+            }
+            compileOptions {
+              sourceCompatibility JavaVersion.VERSION_17
+              targetCompatibility JavaVersion.VERSION_17
+            }
+          }
+          ROBOEOF
+          cat > app/src/main/AndroidManifest.xml <<'ROBOEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+            <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+            <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+            <uses-permission android:name="android.permission.WAKE_LOCK" />
+            <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+            <application
+                android:label="ROBO EA"
+                android:icon="@mipmap/ic_launcher"
+                android:allowBackup="false"
+                android:usesCleartextTraffic="false"
+                android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+              <activity
+                  android:name=".MainActivity"
+                  android:exported="true"
+                  android:launchMode="singleTask"
+                  android:configChanges="orientation|screenSize|keyboardHidden|keyboard|screenLayout|smallestScreenSize|uiMode|density|fontScale"
+                  android:windowSoftInputMode="adjustResize">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+              </activity>
+              <service android:name=".BotService" android:exported="false" />
+            </application>
+          </manifest>
+          ROBOEOF
+          cat > app/src/main/java/com/roboea/app/MainActivity.java <<'ROBOEOF'
+          package com.roboea.app;
+
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.MutableContextWrapper;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.PowerManager;
+          import android.provider.Settings;
+          import android.view.ViewGroup;
+          import android.webkit.CookieManager;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.FrameLayout;
+          import java.io.ByteArrayOutputStream;
+          import java.io.InputStream;
+
+          public class MainActivity extends Activity {
+            static WebView web;
+            static MutableContextWrapper wrap;
+            static MainActivity current;
+            static volatile boolean visible = false;
+            static ValueCallback<Uri[]> fileCb;
+            static String host = "";
+            FrameLayout root;
+            boolean askedOverlay = false, askedBatt = false;
+
+            static boolean askedRun = false;
+
+            public static class Bridge {
+              @JavascriptInterface
+              public void push(String j) {
+                BotService.update(j);
+                final MainActivity a = current;
+                if (a != null && !askedRun && j.contains("\"run\":true")
+                    && Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(a)) {
+                  askedRun = true;
+                  a.runOnUiThread(new Runnable() { public void run() { a.askOverlay(); } });
+                }
+              }
+            }
+
+            static String readAsset(Context c, String n) {
+              try {
+                InputStream in = c.getAssets().open(n);
+                ByteArrayOutputStream o = new ByteArrayOutputStream();
+                byte[] b = new byte[4096];
+                int k;
+                while ((k = in.read(b)) > 0) o.write(b, 0, k);
+                in.close();
+                return o.toString("UTF-8");
+              } catch (Exception e) { return ""; }
+            }
+
+            void makeWeb() {
+              wrap = new MutableContextWrapper(getApplicationContext());
+              web = new WebView(wrap);
+              web.setBackgroundColor(0xFF000000);
+              WebSettings s = web.getSettings();
+              s.setJavaScriptEnabled(true);
+              s.setDomStorageEnabled(true);
+              s.setDatabaseEnabled(true);
+              s.setMediaPlaybackRequiresUserGesture(false);
+              s.setAllowFileAccess(false);
+              CookieManager.getInstance().setAcceptCookie(true);
+              String url = readAsset(this, "url.txt").trim();
+              try { host = Uri.parse(url).getHost(); } catch (Exception e) { host = ""; }
+              web.addJavascriptInterface(new Bridge(), "RoboNative");
+              web.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                  Uri u = r.getUrl();
+                  String h = u.getHost();
+                  if (h != null && h.equals(host)) return false;
+                  String sc = u.getScheme();
+                  if ("http".equals(sc) || "https".equals(sc) || "tel".equals(sc) || "mailto".equals(sc)) {
+                    try {
+                      Intent i = new Intent(Intent.ACTION_VIEW, u);
+                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      v.getContext().getApplicationContext().startActivity(i);
+                    } catch (Exception e) { }
+                  }
+                  return true;
+                }
+                @Override
+                public void onPageFinished(WebView v, String u) {
+                  v.evaluateJavascript(readAsset(v.getContext().getApplicationContext(), "inject.js"), null);
+                }
+              });
+              web.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                  MainActivity a = current;
+                  if (a == null) return false;
+                  if (fileCb != null) fileCb.onReceiveValue(null);
+                  fileCb = cb;
+                  try {
+                    a.startActivityForResult(p.createIntent(), 11);
+                  } catch (Exception e) {
+                    fileCb = null;
+                    return false;
+                  }
+                  return true;
+                }
+              });
+              web.loadUrl(url);
+            }
+
+            @Override
+            protected void onCreate(Bundle b) {
+              super.onCreate(b);
+              current = this;
+              getWindow().setStatusBarColor(0xFF000000);
+              getWindow().setNavigationBarColor(0xFF000000);
+              root = new FrameLayout(this);
+              root.setBackgroundColor(0xFF000000);
+              setContentView(root);
+              if (web == null) makeWeb();
+              wrap.setBaseContext(this);
+              ViewGroup p = (ViewGroup) web.getParent();
+              if (p != null) p.removeView(web);
+              root.addView(web, new FrameLayout.LayoutParams(-1, -1));
+              startBot();
+              if (Build.VERSION.SDK_INT >= 33
+                  && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, 21);
+              }
+            }
+
+            void askOverlay() {
+              new AlertDialog.Builder(this)
+                  .setTitle("Show the robot")
+                  .setMessage("Allow \"Display over other apps\" so the round robot shows on screen while the bot runs.")
+                  .setPositiveButton("Allow", (d, w) -> startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))))
+                  .setNegativeButton("Not now", null)
+                  .show();
+            }
+
+            void startBot() {
+              Intent i = new Intent(this, BotService.class);
+              if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+            }
+
+            @Override
+            protected void onResume() {
+              super.onResume();
+              visible = true;
+              web.resumeTimers();
+              startBot();
+              if (Build.VERSION.SDK_INT >= 23 && !askedBatt) {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                if (!pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                  askedBatt = true;
+                  new AlertDialog.Builder(this)
+                      .setTitle("Keep trading in the background")
+                      .setMessage("Allow ROBO EA to run without battery limits so the phone does not freeze the bot when the screen is off.")
+                      .setPositiveButton("Allow", (d, w) -> startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName()))))
+                      .setNegativeButton("Not now", null)
+                      .show();
+                }
+              }
+            }
+
+            @Override
+            protected void onPause() {
+              super.onPause();
+              visible = false;
+              if (web != null) web.resumeTimers();
+            }
+
+            @Override
+            protected void onStop() {
+              super.onStop();
+              if (web != null) web.resumeTimers();
+            }
+
+            @Override
+            protected void onActivityResult(int rq, int rs, Intent d) {
+              if (rq == 11) {
+                if (fileCb != null) {
+                  fileCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(rs, d));
+                  fileCb = null;
+                }
+                return;
+              }
+              super.onActivityResult(rq, rs, d);
+            }
+
+            @Override
+            public void onBackPressed() {
+              if (web != null && web.canGoBack()) web.goBack(); else moveTaskToBack(true);
+            }
+
+            @Override
+            protected void onDestroy() {
+              current = null;
+              visible = false;
+              try { root.removeView(web); } catch (Exception e) { }
+              if (wrap != null) wrap.setBaseContext(getApplicationContext());
+              super.onDestroy();
+            }
+          }
+          ROBOEOF
+          cat > app/src/main/java/com/roboea/app/BotService.java <<'ROBOEOF'
+          package com.roboea.app;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
+          import android.content.Intent;
+          import android.graphics.Bitmap;
+          import android.graphics.BitmapFactory;
+          import android.graphics.BitmapShader;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.graphics.PixelFormat;
+          import android.graphics.Shader;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
+          import android.os.PowerManager;
+          import android.provider.Settings;
+          import android.util.Base64;
+          import android.util.DisplayMetrics;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.webkit.WebView;
+          import android.widget.FrameLayout;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import java.text.DecimalFormat;
+          import java.text.DecimalFormatSymbols;
+          import java.util.Locale;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          public class BotService extends Service {
+            static volatile String latest = "";
+            static volatile long lastPush = 0;
+
+            static void update(String j) {
+              latest = j;
+              lastPush = System.currentTimeMillis();
+            }
+
+            static final DecimalFormat PX = new DecimalFormat("0.#####", DecimalFormatSymbols.getInstance(Locale.US));
+
+            WindowManager wm;
+            LinearLayout box, panel, list;
+            ImageView bubble;
+            TextView title, status, sub;
+            ImageView banner;
+            View dot;
+            ImageView avatar;
+            ScrollView sv;
+            TextView pw;
+            View shade;
+            GradientDrawable panelBg;
+            int acc = 0xFF2DFFA0;
+            WindowManager.LayoutParams lp;
+            Handler h = new Handler(Looper.getMainLooper());
+            PowerManager.WakeLock wl;
+            boolean open = false, added = false, run = false, conn = false;
+            String shown = "", imgKey = "", imgData = "", name = "ROBO EA";
+            int panelW = 0;
+            Bitmap srcBmp;
+            int srcHash = -1;
+            JSONObject cur = null;
+
+            Runnable tick = new Runnable() {
+              public void run() {
+                try { refresh(); } catch (Throwable t) { }
+                h.postDelayed(this, 800);
+              }
+            };
+
+            int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density + 0.5f); }
+
+            @Override
+            public IBinder onBind(Intent i) { return null; }
+
+            @Override
+            public void onCreate() {
+              super.onCreate();
+              if (Build.VERSION.SDK_INT >= 26) {
+                NotificationChannel ch = new NotificationChannel("roboea", "ROBO EA running", NotificationManager.IMPORTANCE_LOW);
+                ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(ch);
+              }
+              PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+              wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "roboea:bot");
+              wl.setReferenceCounted(false);
+              wl.acquire();
+              h.post(tick);
+            }
+
+            @Override
+            public int onStartCommand(Intent in, int flags, int id) {
+              Intent oi = new Intent(this, MainActivity.class);
+              oi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+              PendingIntent pi = PendingIntent.getActivity(this, 0, oi,
+                  PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
+              Notification.Builder nb = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, "roboea") : new Notification.Builder(this);
+              Notification n = nb.setContentTitle("ROBO EA is running")
+                  .setContentText("Tap to open. Trades are managed in the background.")
+                  .setSmallIcon(android.R.drawable.ic_dialog_info)
+                  .setContentIntent(pi)
+                  .setOngoing(true)
+                  .build();
+              startForeground(1, n);
+              ensureBubble();
+              return START_STICKY;
+            }
+
+            void ensureBubble() {
+              if (added) return;
+              if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) return;
+              try {
+                build();
+                added = true;
+              } catch (Throwable t) { added = false; }
+            }
+
+            TextView tv(String s, int sp, int color, boolean bold) {
+              TextView t = new TextView(this);
+              t.setText(s);
+              t.setTextSize(sp);
+              t.setTextColor(color);
+              if (bold) t.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+              return t;
+            }
+
+            TextView btn(String s, int color) {
+              TextView t = tv(s, 12, color, true);
+              t.setGravity(Gravity.CENTER);
+              t.setPadding(dp(6), dp(7), dp(6), dp(7));
+              GradientDrawable g = new GradientDrawable();
+              g.setColor(0xFF1C1F24);
+              g.setCornerRadius(dp(8));
+              g.setStroke(dp(1), color);
+              t.setBackground(g);
+              return t;
+            }
+
+            void build() {
+              wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+              box = new LinearLayout(this);
+              box.setOrientation(LinearLayout.VERTICAL);
+              bubble = new ImageView(this);
+              box.addView(bubble, new LinearLayout.LayoutParams(dp(48), dp(48)));
+
+              panel = new LinearLayout(this);
+              panel.setOrientation(LinearLayout.VERTICAL);
+              panelBg = new GradientDrawable();
+              panelBg.setColor(0xFF0B0F1A);
+              panelBg.setCornerRadius(dp(18));
+              panelBg.setStroke(dp(1), acc);
+              panel.setBackground(panelBg);
+              panel.setClipToOutline(true);
+
+              FrameLayout hdr = new FrameLayout(this);
+              banner = new ImageView(this);
+              banner.setScaleType(ImageView.ScaleType.CENTER_CROP);
+              hdr.addView(banner, new FrameLayout.LayoutParams(-1, -1));
+              shade = new View(this);
+              hdr.addView(shade, new FrameLayout.LayoutParams(-1, -1));
+              LinearLayout hc = new LinearLayout(this);
+              hc.setOrientation(LinearLayout.HORIZONTAL);
+              hc.setGravity(Gravity.CENTER_VERTICAL);
+              hc.setPadding(dp(10), dp(6), dp(40), dp(6));
+              avatar = new ImageView(this);
+              hc.addView(avatar, new LinearLayout.LayoutParams(dp(44), dp(44)));
+              LinearLayout tc = new LinearLayout(this);
+              tc.setOrientation(LinearLayout.VERTICAL);
+              title = tv("ROBO EA", 15, 0xFFFFFFFF, true);
+              title.setSingleLine(true);
+              title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+              tc.addView(title);
+              sub = tv("", 11, 0xFFD0D4DC, false);
+              sub.setSingleLine(true);
+              sub.setEllipsize(android.text.TextUtils.TruncateAt.END);
+              tc.addView(sub);
+              LinearLayout sr = new LinearLayout(this);
+              sr.setOrientation(LinearLayout.HORIZONTAL);
+              sr.setGravity(Gravity.CENTER_VERTICAL);
+              dot = new View(this);
+              sr.addView(dot, new LinearLayout.LayoutParams(dp(8), dp(8)));
+              status = tv("", 11, acc, false);
+              status.setSingleLine(true);
+              LinearLayout.LayoutParams stl = new LinearLayout.LayoutParams(-2, -2);
+              stl.leftMargin = dp(6);
+              sr.addView(status, stl);
+              tc.addView(sr);
+              LinearLayout.LayoutParams tcl = new LinearLayout.LayoutParams(0, -2, 1f);
+              tcl.leftMargin = dp(10);
+              hc.addView(tc, tcl);
+              hdr.addView(hc, new FrameLayout.LayoutParams(-1, -1));
+              TextView closeBtn = tv("\u2715", 12, 0xFFFFFFFF, true);
+              closeBtn.setGravity(Gravity.CENTER);
+              GradientDrawable cg = new GradientDrawable();
+              cg.setColor(0x99000000);
+              cg.setShape(GradientDrawable.OVAL);
+              closeBtn.setBackground(cg);
+              FrameLayout.LayoutParams cl = new FrameLayout.LayoutParams(dp(26), dp(26), Gravity.TOP | Gravity.END);
+              cl.topMargin = dp(6);
+              cl.rightMargin = dp(6);
+              hdr.addView(closeBtn, cl);
+              closeBtn.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) { toggle(); }
+              });
+              panel.addView(hdr, new LinearLayout.LayoutParams(-1, dp(72)));
+
+              sv = new ScrollView(this);
+              list = new LinearLayout(this);
+              list.setOrientation(LinearLayout.VERTICAL);
+              list.setPadding(dp(12), dp(8), dp(12), dp(8));
+              sv.addView(list);
+              panel.addView(sv, new LinearLayout.LayoutParams(-1, dp(150)));
+
+              pw = new TextView(this);
+              pw.setTextSize(11);
+              pw.setPadding(dp(10), dp(4), dp(12), dp(6));
+              LinearLayout.LayoutParams pwl = new LinearLayout.LayoutParams(-2, -2);
+              pwl.gravity = Gravity.END;
+              panel.addView(pw, pwl);
+
+              applyTheme(acc);
+              panel.setVisibility(View.GONE);
+              panelW = Math.min(dp(280), getResources().getDisplayMetrics().widthPixels - dp(16));
+              LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(panelW, -2);
+              pl.topMargin = dp(6);
+              box.addView(panel, pl);
+
+              lp = new WindowManager.LayoutParams(-2, -2,
+                  Build.VERSION.SDK_INT >= 26 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_PHONE,
+                  WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                  PixelFormat.TRANSLUCENT);
+              lp.gravity = Gravity.TOP | Gravity.START;
+              lp.x = dp(8);
+              lp.y = dp(160);
+
+              bubble.setOnTouchListener(new View.OnTouchListener() {
+                float dx, dy;
+                int sx, sy;
+                boolean moved;
+                public boolean onTouch(View v, MotionEvent e) {
+                  switch (e.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                      sx = lp.x; sy = lp.y; dx = e.getRawX(); dy = e.getRawY(); moved = false;
+                      return true;
+                    case MotionEvent.ACTION_MOVE:
+                      float mx = e.getRawX() - dx, my = e.getRawY() - dy;
+                      if (Math.abs(mx) > dp(6) || Math.abs(my) > dp(6)) moved = true;
+                      if (moved) {
+                        lp.x = Math.max(0, sx + (int) mx);
+                        lp.y = Math.max(0, sy + (int) my);
+                        try { wm.updateViewLayout(box, lp); } catch (Exception ex) { }
+                      }
+                      return true;
+                    case MotionEvent.ACTION_UP:
+                      if (!moved) toggle();
+                      return true;
+                  }
+                  return false;
+                }
+              });
+              wm.addView(box, lp);
+            }
+
+            void toggle() {
+              open = !open;
+              panel.setVisibility(open ? View.VISIBLE : View.GONE);
+              if (open) {
+                fill(System.currentTimeMillis() - lastPush > 15000);
+                DisplayMetrics m = getResources().getDisplayMetrics();
+                int need = dp(48 + 6 + 72 + 150 + 26);
+                if (lp.y + need > m.heightPixels) lp.y = Math.max(0, m.heightPixels - need);
+                if (lp.x + panelW > m.widthPixels) lp.x = Math.max(0, m.widthPixels - panelW);
+              }
+              try { wm.updateViewLayout(box, lp); } catch (Exception e) { }
+            }
+
+            void parse(String j) {
+              try {
+                cur = new JSONObject(j);
+                run = cur.optBoolean("run");
+                conn = cur.optBoolean("conn");
+                name = cur.optString("name", "ROBO EA");
+                String im = cur.optString("img", "");
+                if (im.startsWith("data:image")) imgData = im;
+              } catch (Exception e) { cur = null; }
+            }
+
+            void refresh() {
+              if (!added) ensureBubble();
+              if (!added) return;
+              boolean hide = !run;
+              box.setVisibility(hide ? View.GONE : View.VISIBLE);
+              if (hide && open) { open = false; panel.setVisibility(View.GONE); }
+              boolean stale = System.currentTimeMillis() - lastPush > 15000;
+              String j = latest;
+              if (!j.equals(shown)) { shown = j; parse(j); }
+              int ring = !run ? 0xFF8A8F98 : (stale ? 0xFFFFB020 : acc);
+              if (srcBmp == null || srcHash != imgData.hashCode()) {
+                srcHash = imgData.hashCode();
+                srcBmp = null;
+                if (imgData.length() > 0) {
+                  try {
+                    byte[] d = Base64.decode(imgData.substring(imgData.indexOf(',') + 1), Base64.DEFAULT);
+                    srcBmp = BitmapFactory.decodeByteArray(d, 0, d.length);
+                  } catch (Throwable t) { srcBmp = null; }
+                }
+                if (srcBmp == null) srcBmp = BitmapFactory.decodeResource(getResources(), R.mipmap.ic_launcher);
+                imgKey = "";
+                  if (srcBmp != null) applyTheme(pickAccent(srcBmp, 0xFF2DFFA0));
+              }
+              String key = ring + ":" + acc + ":" + srcHash;
+              if (!key.equals(imgKey) && srcBmp != null) {
+                imgKey = key;
+                bubble.setImageBitmap(circle(srcBmp, dp(48), ring));
+                avatar.setImageBitmap(circle(srcBmp, dp(44), acc));
+                  banner.setImageBitmap(srcBmp);
+              }
+              if (open) fill(stale);
+            }
+
+            void applyTheme(int a) {
+              acc = a;
+              float[] hv = new float[3];
+              Color.colorToHSV(a, hv);
+              int c0 = Color.HSVToColor(new float[] {hv[0], 0.55f, 0.09f});
+              int c1 = Color.HSVToColor(new float[] {hv[0], 0.50f, 0.14f});
+              int c2 = Color.HSVToColor(new float[] {hv[0], 0.45f, 0.20f});
+              panelBg.setColor(c0);
+              panelBg.setStroke(dp(1), a);
+              shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0x99000000, (c0 & 0x00FFFFFF) | 0xF0000000}));
+              sv.setBackgroundColor(c1);
+              pw.setBackgroundColor(c2);
+              android.text.SpannableString ps = new android.text.SpannableString("Powered by ROBO EA");
+              ps.setSpan(new android.text.style.ForegroundColorSpan(0xFF9AA0AA), 0, 11, 0);
+              ps.setSpan(new android.text.style.ForegroundColorSpan(a), 11, 18, 0);
+              ps.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 11, 18, 0);
+              pw.setText(ps);
+            }
+
+            static int pickAccent(Bitmap b, int def) {
+              try {
+                Bitmap s = Bitmap.createScaledBitmap(b, 24, 24, true);
+                float[] hsv = new float[3];
+                float[] w = new float[12], hs = new float[12], ss = new float[12];
+                for (int y = 0; y < 24; y++) for (int x = 0; x < 24; x++) {
+                  Color.colorToHSV(s.getPixel(x, y), hsv);
+                  if (hsv[1] < 0.35f || hsv[2] < 0.4f) continue;
+                  float wt = hsv[1] * hsv[2];
+                  int k = Math.min(11, (int) (hsv[0] / 30f));
+                  w[k] += wt; hs[k] += wt * hsv[0]; ss[k] += wt * hsv[1];
+                }
+                int best = -1;
+                float bw = 3f;
+                for (int k = 0; k < 12; k++) if (w[k] > bw) { bw = w[k]; best = k; }
+                if (best < 0) return def;
+                float sat = Math.max(0.55f, Math.min(1f, ss[best] / w[best] + 0.1f));
+                return Color.HSVToColor(new float[] {hs[best] / w[best], sat, 1f});
+              } catch (Throwable t) { return def; }
+            }
+
+            static Bitmap circle(Bitmap src, int size, int ring) {
+              Bitmap out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+              Canvas c = new Canvas(out);
+              float r = size / 2f, rw = size * 0.07f;
+              Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+              p.setColor(0xFF111111);
+              c.drawCircle(r, r, r, p);
+              int w = src.getWidth(), hh = src.getHeight(), m = Math.min(w, hh);
+              Bitmap sq = Bitmap.createBitmap(src, (w - m) / 2, (hh - m) / 2, m, m);
+              Bitmap sc = Bitmap.createScaledBitmap(sq, size, size, true);
+              Paint sp = new Paint(Paint.ANTI_ALIAS_FLAG);
+              sp.setShader(new BitmapShader(sc, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
+              c.drawCircle(r, r, r - rw, sp);
+              Paint rp = new Paint(Paint.ANTI_ALIAS_FLAG);
+              rp.setStyle(Paint.Style.STROKE);
+              rp.setStrokeWidth(rw);
+              rp.setColor(ring);
+              c.drawCircle(r, r, r - rw / 2, rp);
+              return out;
+            }
+
+            static String m(double v) { return Double.isNaN(v) ? "-" : String.format(Locale.US, "%.2f", v); }
+            static String sgn(double v) { return Double.isNaN(v) ? "" : (v >= 0 ? "+" : "") + String.format(Locale.US, "%.2f", v); }
+            static String px(double v) { return Double.isNaN(v) ? "-" : PX.format(v); }
+
+            static int sideColor(String side) { return "BUY".equalsIgnoreCase(side) ? 0xFF2DFFA0 : 0xFFFF5470; }
+
+            static String lv(String k, double v) { return k + " " + ((Double.isNaN(v) || v <= 0) ? "-" : px(v)); }
+
+            TextView line(String s, int color, int sp, boolean bold) {
+              TextView t = tv(s, sp, color, false);
+              t.setTypeface(android.graphics.Typeface.MONOSPACE, bold ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+              t.setPadding(0, dp(2), 0, dp(2));
+              return t;
+            }
+
+            void setDot(int color) {
+              GradientDrawable d = new GradientDrawable();
+              d.setShape(GradientDrawable.OVAL);
+              d.setColor(color);
+              dot.setBackground(d);
+            }
+
+            void fill(boolean stale) {
+              title.setText(name);
+              int openN = 0;
+              JSONArray tr = cur == null ? null : cur.optJSONArray("trades");
+              if (tr != null) for (int i = 0; i < tr.length(); i++) {
+                JSONObject t = tr.optJSONObject(i);
+                if (t != null && !"closed".equals(t.optString("st"))) openN++;
+              }
+              int sc;
+              if (cur == null) { sc = 0xFFFFB020; status.setText("Waiting for the app"); }
+              else if (stale) { sc = 0xFFFFB020; status.setText("No updates from the app"); }
+              else if (!conn) { sc = 0xFFFF5470; status.setText("Server: Not connected"); }
+              else { sc = acc; status.setText("Server: Connected"); }
+              status.setTextColor(sc);
+              setDot(sc);
+              if (cur != null && conn) sub.setText("Balance " + m(cur.optDouble("bal")) + " " + cur.optString("cur", "") + "   P/L " + sgn(cur.optDouble("pl")));
+              else sub.setText("");
+              list.removeAllViews();
+              int teal = acc;
+              list.addView(line(conn ? ">> CONNECTED TO TRADE SERVER" : ">> WAITING FOR TRADE SERVER", teal, 11, false));
+              if (cur == null) return;
+              list.addView(line(openN > 0 ? ">> BOT RUNNING. MANAGING " + openN + " TRADE" + (openN > 1 ? "S" : "") : ">> BOT RUNNING. WATCHING MARKETS", teal, 11, false));
+              if (tr != null) for (int i = 0; i < tr.length(); i++) {
+                JSONObject t = tr.optJSONObject(i);
+                if (t == null || "closed".equals(t.optString("st"))) continue;
+                String side = t.optString("side").toUpperCase(Locale.US);
+                list.addView(line(">> TRADE OPENED  " + t.optString("s") + " " + side, sideColor(side), 12, true));
+                list.addView(line("   " + lv("ENTRY", t.optDouble("entry")), 0xFFFFFFFF, 11, false));
+                list.addView(line("   " + lv("SL", t.optDouble("sl")) + "   " + lv("TP", t.optDouble("tp")), 0xFFFFFFFF, 11, false));
+                double pl = t.optDouble("pl");
+                list.addView(line("   P/L " + sgn(pl), (Double.isNaN(pl) || pl >= 0) ? 0xFF2DFFA0 : 0xFFFF5470, 11, true));
+                if ("locked".equals(t.optString("st"))) list.addView(line("   PROFIT LOCKED. SL ABOVE ENTRY", teal, 10, false));
+                String note = t.optString("note", "");
+                if (note.length() > 0 && !"null".equals(note)) list.addView(line("   " + note, 0xFF8A8F98, 10, false));
+              }
+              int closedN = 0;
+              if (tr != null) for (int i = 0; i < tr.length() && closedN < 3; i++) {
+                JSONObject t = tr.optJSONObject(i);
+                if (t == null || !"closed".equals(t.optString("st"))) continue;
+                list.addView(line(">> CLOSED " + t.optString("s") + " " + t.optString("side").toUpperCase(Locale.US) + "  " + sgn(t.optDouble("pl")), 0xFF8A8F98, 11, false));
+                closedN++;
+              }
+              list.addView(line(">> CONTINUE TRADING...", teal, 11, false));
+            }
+
+            @Override
+            public void onDestroy() {
+              h.removeCallbacks(tick);
+              try { if (added) wm.removeView(box); } catch (Exception e) { }
+              try { if (wl != null && wl.isHeld()) wl.release(); } catch (Exception e) { }
+              super.onDestroy();
+            }
+          }
+          ROBOEOF
+          cat > app/src/main/assets/inject.js <<'ROBOEOF'
+          (function(){
+            if(window.__roboHook) return; window.__roboHook=true;
+            var n=0, lastImg="";
+            function num(v){ v=+v; return isFinite(v)?v:null; }
+            function snap(){
+              try{
+                if(typeof state==="undefined"||!window.RoboNative) return;
+                var r0=(state.robots||[])[0]||{}, b=r0.bot||{}, a=state.acct||{};
+                var trades=(state.trades||[]).slice(0,30).map(function(t){ return {s:t.symbol,side:t.side,lots:t.lots,entry:num(t.entry),sl:num(t.sl),tp:num(t.tp),pl:num(t.profit),st:t.status,note:t.note||""}; });
+                var sigs=[], si=state.symInfo||{};
+                Object.keys(si).forEach(function(k){ var i=si[k]; if(i&&i.signal){ var pl=i.plan||{}; sigs.push({s:k,sig:String(i.signal),side:pl.side||"",entry:num(pl.entry),sl:num(pl.sl),tp:num(pl.tp)}); } });
+                var img=(typeof b.img==="string"&&b.img.indexOf("data:image")===0&&b.img.length<400000)?b.img:"";
+                var sendImg=(img&&(img!==lastImg||n%30===0))?img:""; if(img) lastImg=img; n++;
+                window.RoboNative.push(JSON.stringify({run:!!state.running,name:b.name||"ROBO EA",img:sendImg,cur:a.currency||"",bal:num(a.balance),eq:num(a.equity),pl:num(a.profit),conn:!!state.acct,trades:trades,sigs:sigs.slice(0,8)}));
+              }catch(e){}
+            }
+            setInterval(snap,1000); snap();
+          })();
+          ROBOEOF
+          U="$APP_URL"
+          case "$U" in http*) ;; *) U="https://$U" ;; esac
+          printf '%s' "$U" > app/src/main/assets/url.txt
+          echo "Site: $U"
+          curl -fsSL --max-time 30 "${U%/}/icon-512.png" -o app/src/main/res/mipmap-xxxhdpi/ic_launcher.png || true
+          python3 - <<'PYEOF2'
+          import struct, zlib
+          p = "app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"
+          sig = b"\x89PNG\r\n\x1a\n"
+          try:
+              ok = open(p, "rb").read(8) == sig
+          except Exception:
+              ok = False
+          if not ok:
+              print("No site icon found, using a plain green icon")
+              n = 192
+              raw = b"".join(b"\x00" + bytes([45, 255, 160, 255]) * n for _ in range(n))
+              def ch(t, d):
+                  c = struct.pack(">I", len(d)) + t + d
+                  return c + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+              png = sig + ch(b"IHDR", struct.pack(">IIBBBBB", n, n, 8, 6, 0, 0, 0)) + ch(b"IDAT", zlib.compress(raw)) + ch(b"IEND", b"")
+              open(p, "wb").write(png)
+          PYEOF2
+          find . -type f | sort
+      - name: Build the APK
+        working-directory: robo
+        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Name the APK
+        run: cp robo/app/build/outputs/apk/debug/app-debug.apk ROBO-EA.apk
+      - name: Publish to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: ROBO EA app ${{ github.run_number }}
+          files: ROBO-EA.apk
